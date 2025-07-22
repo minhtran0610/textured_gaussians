@@ -46,7 +46,7 @@ class MCMCStrategy(Strategy):
 
     """
 
-    cap_max: int = 1_000_000
+    cap_max: int = 500_000
     noise_lr: float = 5e5
     refine_start_iter: int = 500
     refine_stop_iter: int = 25_000
@@ -152,11 +152,13 @@ class MCMCStrategy(Strategy):
         binoms: Tensor,
     ) -> int:
         if self.is_wsr:
-            opacities = torch.tanh(params["opacities"].flatten()) # [-1, 1]
+            opacities = torch.tanh(params["opacities"].flatten())  # [-1, 1]
         else:
-            opacities = torch.sigmoid(params["opacities"].flatten()) # [0, 1]
+            opacities = torch.sigmoid(params["opacities"].flatten())  # [0, 1]
 
-        opacities = torch.abs(opacities) # make sure the opacities are positive for pruning
+        opacities = torch.abs(
+            opacities
+        )  # make sure the opacities are positive for pruning
 
         dead_mask = opacities <= self.min_opacity
         n_gs = dead_mask.sum().item()
@@ -168,7 +170,7 @@ class MCMCStrategy(Strategy):
                 mask=dead_mask,
                 binoms=binoms,
                 min_opacity=self.min_opacity,
-                is_wsr=self.is_wsr
+                is_wsr=self.is_wsr,
             )
         return n_gs
 

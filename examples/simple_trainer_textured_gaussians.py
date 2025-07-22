@@ -31,7 +31,10 @@ from utils import (
     set_random_seed,
 )
 
-from textured_gaussians.rendering import rasterization_2dgs, rasterization_textured_gaussians
+from textured_gaussians.rendering import (
+    rasterization_2dgs,
+    rasterization_textured_gaussians,
+)
 from textured_gaussians.strategy import DefaultStrategy, MCMCStrategy
 
 
@@ -48,7 +51,7 @@ class Config:
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
     # Downsample factor for the dataset
-    data_factor: int = 4
+    data_factor: int = 1
     # Directory to save results
     result_dir: str = "results/garden"
     # Every N images there is a test image
@@ -171,9 +174,9 @@ class Config:
     alpha_lambda: float = 1e-1
 
     # scale_loss
-    scale_loss: bool = False 
+    scale_loss: bool = False
     scale_lambda: float = 1e-1
-    
+
     # Model for splatting.
     model_type: Literal["2dgs", "textured_gaussians"] = "2dgs"
 
@@ -183,17 +186,15 @@ class Config:
     tb_save_image: bool = False
 
     # Strategy for GS densification
-    strategy: Union[DefaultStrategy, MCMCStrategy] = field(
-        default_factory=MCMCStrategy
-    )
+    strategy: Union[DefaultStrategy, MCMCStrategy] = field(default_factory=MCMCStrategy)
 
     # Pretrained checkpoints
     pretrained_path: str = None
 
     # textured gaussians
     texture_resolution: int = 50
-    textured_rgb: bool = False
-    textured_alpha: bool = False
+    textured_rgb: bool = True
+    textured_alpha: bool = True
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -215,8 +216,6 @@ class Config:
         else:
             assert_never(strategy)
 
-        
-
 
 def create_splats_with_optimizers(
     parser: Parser,
@@ -237,7 +236,9 @@ def create_splats_with_optimizers(
         points = torch.from_numpy(parser.points).float()
         rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()
         if init_num_pts < points.shape[0]:
-            sampled_pts_idx = np.random.choice(points.shape[0], init_num_pts, replace=False)
+            sampled_pts_idx = np.random.choice(
+                points.shape[0], init_num_pts, replace=False
+            )
         else:
             sampled_pts_idx = np.arange(points.shape[0])
         # randomly sample points from the SfM points
@@ -247,7 +248,9 @@ def create_splats_with_optimizers(
         assert cfg.pretrained_path is not None
         ckpt = torch.load(cfg.pretrained_path)["splats"]
         if init_num_pts < ckpt["means"].shape[0]:
-            sampled_pts_idx = np.random.choice(ckpt["means"].shape[0], init_num_pts, replace=False)
+            sampled_pts_idx = np.random.choice(
+                ckpt["means"].shape[0], init_num_pts, replace=False
+            )
         else:
             sampled_pts_idx = np.arange(ckpt["means"].shape[0])
         points = ckpt["means"][sampled_pts_idx]
@@ -257,7 +260,7 @@ def create_splats_with_optimizers(
         rgbs = torch.rand((init_num_pts, 3))
     else:
         raise ValueError("Please specify a correct init_type: sfm or random")
-    
+
     if init_type == "pretrained":
         scales = ckpt["scales"][sampled_pts_idx]
         quats = ckpt["quats"][sampled_pts_idx]
@@ -283,8 +286,12 @@ def create_splats_with_optimizers(
     if feature_dim is None:
         # color is SH coefficients.
         if init_type == "pretrained":
-            params.append(("sh0", torch.nn.Parameter(ckpt["sh0"][sampled_pts_idx]), 2.5e-3))
-            params.append(("shN", torch.nn.Parameter(ckpt["shN"][sampled_pts_idx]), 2.5e-3 / 20))
+            params.append(
+                ("sh0", torch.nn.Parameter(ckpt["sh0"][sampled_pts_idx]), 2.5e-3)
+            )
+            params.append(
+                ("shN", torch.nn.Parameter(ckpt["shN"][sampled_pts_idx]), 2.5e-3 / 20)
+            )
         else:
             colors = torch.zeros((N, (sh_degree + 1) ** 2, 3))  # [N, K, 3]
             colors[:, 0, :] = rgb_to_sh(rgbs)
@@ -295,12 +302,14 @@ def create_splats_with_optimizers(
         features = torch.rand(N, feature_dim)  # [N, feature_dim]
         params.append(("features", torch.nn.Parameter(features), 2.5e-3))
         colors = torch.logit(rgbs)  # [N, 3]
-        params.append(("colors", torch.nn.Parameter(colors), 2.5e-3))  
+        params.append(("colors", torch.nn.Parameter(colors), 2.5e-3))
 
     if cfg.model_type == "textured_gaussians":
-        textures = torch.ones(points.shape[0], cfg.texture_resolution, cfg.texture_resolution, 4)
-        textures[:, :, :, :3] = 0.1 # init color to low value
-        textures[:, :, :, 3] = 1.0 # init alpha to 1.0
+        textures = torch.ones(
+            points.shape[0], cfg.texture_resolution, cfg.texture_resolution, 4
+        )
+        textures[:, :, :, :3] = 0.1  # init color to low value
+        textures[:, :, :, 3] = 1.0  # init alpha to 1.0
         params.append(("textures", torch.nn.Parameter(textures), 2.5e-3))
 
     splats = torch.nn.ParameterDict({n: v for n, v, _ in params}).to(device)
@@ -327,7 +336,7 @@ class Runner:
 
         self.cfg = cfg
         self.device = "cuda"
-        self.step = 0 # current optimization step
+        self.step = 0  # current optimization step
 
         # Where to dump results.
         os.makedirs(cfg.result_dir, exist_ok=True)
@@ -365,9 +374,13 @@ class Runner:
                 bg_color = (255, 255, 255)
             else:
                 bg_color = (0, 0, 0)
-            self.trainset = BlenderDataset(data_dir=cfg.data_dir, split="train", bg_color=bg_color)
-            self.valset = BlenderDataset(data_dir=cfg.data_dir, split="val", bg_color=bg_color)
-            self.scene_scale = 1.0 # no scaling required
+            self.trainset = BlenderDataset(
+                data_dir=cfg.data_dir, split="train", bg_color=bg_color
+            )
+            self.valset = BlenderDataset(
+                data_dir=cfg.data_dir, split="val", bg_color=bg_color
+            )
+            self.scene_scale = 1.0  # no scaling required
         else:
             raise ValueError(f"Dataset mode {cfg.dataset} not supported!")
 
@@ -471,15 +484,17 @@ class Runner:
         # textures: [N, L, L, 4]
         textures = self.splats["textures"]
         if not self.cfg.textured_rgb:
-            rgb_textures = torch.zeros_like(textures[..., :3]) # [N, L, L, 3]
+            rgb_textures = torch.zeros_like(textures[..., :3])  # [N, L, L, 3]
         else:
-            rgb_textures = textures[..., :3] # [N, L, L, 3]
+            rgb_textures = textures[..., :3]  # [N, L, L, 3]
         if not self.cfg.textured_alpha:
-            alpha_textures = torch.ones_like(textures[..., 3:4]) # [N, L, L, 1]
+            alpha_textures = torch.ones_like(textures[..., 3:4])  # [N, L, L, 1]
         else:
-            alpha_textures = textures[..., 3:4] # [N, L, L, 1]
-            alpha_textures = alpha_textures / (alpha_textures.amax(dim=[1, 2], keepdim=True) + 1e-6) # normalize so that the max is 1
-        textures = torch.cat([rgb_textures, alpha_textures], dim=-1) # [N, L, L, 4]
+            alpha_textures = textures[..., 3:4]  # [N, L, L, 1]
+            alpha_textures = alpha_textures / (
+                alpha_textures.amax(dim=[1, 2], keepdim=True) + 1e-6
+            )  # normalize so that the max is 1
+        textures = torch.cat([rgb_textures, alpha_textures], dim=-1)  # [N, L, L, 4]
         textures = textures.clamp(0.0, 1.0)
         return textures
 
@@ -497,8 +512,7 @@ class Runner:
         quats = self.splats["quats"]  # [N, 4]
         scales = torch.exp(self.splats["scales"])  # [N, 3]
 
-        opacities = torch.sigmoid(self.splats["opacities"]) # [N,]
-        
+        opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
 
         image_ids = kwargs.pop("image_ids", None)
         if self.cfg.app_opt:
@@ -592,7 +606,6 @@ class Runner:
         with open(f"{cfg.result_dir}/cfg.yml", "w") as f:
             yaml.dump(vars(cfg), f)
 
-
         max_steps = cfg.max_steps
         init_step = 0
 
@@ -628,7 +641,7 @@ class Runner:
             self.step = step
 
             if not cfg.disable_viewer:
-                while self.viewer.state.status == "paused":
+                while self.viewer.state == "paused":
                     time.sleep(0.01)
                 self.viewer.lock.acquire()
                 tic = time.time()
@@ -650,7 +663,7 @@ class Runner:
                 points = data["points"].to(device)  # [1, M, 2]
                 depths_gt = data["depths"].to(device)  # [1, M]
             if cfg.alpha_loss:
-                alphas_gt = data["alpha"].to(device) # [1, H, W]
+                alphas_gt = data["alpha"].to(device)  # [1, H, W]
 
             height, width = pixels.shape[1:3]
 
@@ -694,7 +707,6 @@ class Runner:
             else:
                 colors, depths = renders, None
 
-            
             if cfg.background_mode is not None:
                 if cfg.background_mode == "random":
                     bkgd = torch.rand(1, 3, device=device)
@@ -704,7 +716,9 @@ class Runner:
                 elif cfg.background_mode == "black":
                     colors = colors + 0.0 * (1.0 - alphas)
                 else:
-                    raise ValueError(f"Background mode {cfg.background_mode} not supported!")
+                    raise ValueError(
+                        f"Background mode {cfg.background_mode} not supported!"
+                    )
 
             self.strategy.step_pre_backward(
                 params=self.splats,
@@ -762,9 +776,9 @@ class Runner:
                     curr_dist_lambda = 0.0
                 distloss = render_distort.mean()
                 loss += distloss * curr_dist_lambda
-            
+
             if cfg.alpha_loss:
-                alphas = alphas.squeeze(-1) # [1, H, W]
+                alphas = alphas.squeeze(-1)  # [1, H, W]
                 alpha_error = (alphas - alphas_gt).abs().mean()
                 alpha_loss = cfg.alpha_lambda * alpha_error
                 loss += alpha_loss
@@ -898,7 +912,7 @@ class Runner:
                     num_train_rays_per_step * num_train_steps_per_sec
                 )
                 # Update the viewer state.
-                self.viewer.state.num_train_rays_per_sec = num_train_rays_per_sec
+                self.viewer.num_train_rays_per_sec = num_train_rays_per_sec
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
 
@@ -953,10 +967,11 @@ class Runner:
                 elif cfg.background_mode == "black":
                     colors = colors + 0.0 * (1.0 - alphas)
                 else:
-                    raise ValueError(f"Background mode {cfg.background_mode} not supported!")
+                    raise ValueError(
+                        f"Background mode {cfg.background_mode} not supported!"
+                    )
             colors = torch.clamp(colors, 0.0, 1.0)
 
-                
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
@@ -1060,21 +1075,29 @@ class Runner:
             camtoworlds = np.concatenate(
                 [
                     camtoworlds,
-                    np.repeat(np.array([[[0.0, 0.0, 0.0, 1.0]]]), len(camtoworlds), axis=0),
+                    np.repeat(
+                        np.array([[[0.0, 0.0, 0.0, 1.0]]]), len(camtoworlds), axis=0
+                    ),
                 ],
                 axis=1,
             )  # [N, 4, 4]
 
             camtoworlds = torch.from_numpy(camtoworlds).float().to(device)
-            K = torch.from_numpy(list(self.parser.Ks_dict.values())[0]).float().to(device)
+            K = (
+                torch.from_numpy(list(self.parser.Ks_dict.values())[0])
+                .float()
+                .to(device)
+            )
             width, height = list(self.parser.imsize_dict.values())[0]
         elif cfg.dataset == "blender":
-            camtoworlds = np.stack(self.trainset.camtoworlds) # [N, 4, 4]
+            camtoworlds = np.stack(self.trainset.camtoworlds)  # [N, 4, 4]
             camtoworlds = generate_interpolated_path(camtoworlds, 1)  # [N, 3, 4]
             camtoworlds = np.concatenate(
                 [
                     camtoworlds,
-                    np.repeat(np.array([[[0.0, 0.0, 0.0, 1.0]]]), len(camtoworlds), axis=0),
+                    np.repeat(
+                        np.array([[[0.0, 0.0, 0.0, 1.0]]]), len(camtoworlds), axis=0
+                    ),
                 ],
                 axis=1,
             )  # [N, 4, 4]
