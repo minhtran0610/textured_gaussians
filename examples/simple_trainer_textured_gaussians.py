@@ -353,6 +353,10 @@ class Runner:
         self.writer = SummaryWriter(log_dir=f"{cfg.result_dir}/tb")
 
         # Load data: Training data should contain initial points and colors.
+        if cfg.background_mode == "white":
+            bg_color = (255, 255, 255)
+        else:
+            bg_color = (0, 0, 0)
         if cfg.dataset == "colmap":
             self.parser = Parser(
                 data_dir=cfg.data_dir,
@@ -365,15 +369,12 @@ class Runner:
                 split="train",
                 patch_size=cfg.patch_size,
                 load_depths=cfg.depth_loss,
+                bg_color=bg_color,
             )
             self.valset = Dataset(self.parser, split="val")
             self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         elif cfg.dataset == "blender":
             self.parser = None
-            if cfg.background_mode == "white":
-                bg_color = (255, 255, 255)
-            else:
-                bg_color = (0, 0, 0)
             self.trainset = BlenderDataset(
                 data_dir=cfg.data_dir, split="train", bg_color=bg_color
             )
@@ -659,6 +660,7 @@ class Runner:
                 pixels.shape[0] * pixels.shape[1] * pixels.shape[2]
             )
             image_ids = data["image_id"].to(device)
+            # print("Image file path: ", data["image_file_path"])
             if cfg.depth_loss:
                 points = data["points"].to(device)  # [1, M, 2]
                 depths_gt = data["depths"].to(device)  # [1, M]

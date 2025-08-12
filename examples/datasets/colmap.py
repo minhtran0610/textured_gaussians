@@ -311,23 +311,35 @@ class Dataset:
         split: str = "train",
         patch_size: Optional[int] = None,
         load_depths: bool = False,
+        bg_color: Tuple[float, float, float] = None,
     ):
         self.parser = parser
         self.split = split
         self.patch_size = patch_size
         self.load_depths = load_depths
+        self.bg_color = None if bg_color is None else np.array(bg_color)
         indices = np.arange(len(self.parser.image_names))
         if split == "train":
             self.indices = indices[indices % self.parser.test_every != 0]
         else:
             self.indices = indices[indices % self.parser.test_every == 0]
 
+    def add_bg_color(self, rgba):
+        if self.bg_color is None:
+            return rgba[..., :3]
+        rgb = rgba[..., :3]  # [0, 255]
+        alpha = rgba[..., 3:4] / 255.0
+        image = rgb * alpha + self.bg_color * (1 - alpha)
+        return image
+
     def __len__(self):
         return len(self.indices)
 
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
-        image = imageio.imread(self.parser.image_paths[index])[..., :3]
+        rgba = imageio.imread(self.parser.image_paths[index])
+        image = self.add_bg_color(rgba)
+        alpha = rgba[..., 3] / 255.0
         camera_id = self.parser.camera_ids[index]
         K = self.parser.Ks_dict[camera_id].copy()  # undistorted K
         params = self.parser.params_dict[camera_id]
@@ -357,6 +369,7 @@ class Dataset:
             "K": torch.from_numpy(K).float(),
             "camtoworld": torch.from_numpy(camtoworlds).float(),
             "image": torch.from_numpy(image).float(),
+            "alpha": torch.from_numpy(alpha).float(),
             "image_id": item,  # the index of the image in the dataset
         }
         if mask is not None:
@@ -387,34 +400,31 @@ class Dataset:
 
         return data
 
+
 class BlenderDataset:
-    """ A simple synthetic Blender dataset class. """
+    """A simple synthetic Blender dataset class."""
 
     def __init__(
         self,
         data_dir: str,
         split: str = "train",
-        bg_color: Tuple[float, float, float] = None
+        bg_color: Tuple[float, float, float] = None,
     ):
         self.data_dir = data_dir
         self.split = split
         self.bg_color = None if bg_color is None else np.array(bg_color)
         self.image_size = 800
-        
+
         # Loads json file that defines camtoworlds and intrinrics
         json_path = os.path.join(self.data_dir, f"transforms_{self.split}.json")
         with open(json_path, "r") as json_file:
             json_data = json.load(json_file)
-        
+
         # Compute camera intrinsics
         self.camera_angle = json_data["camera_angle_x"] * 0.5
-        c = self.image_size // 2 # pricipal point in pixels
+        c = self.image_size // 2  # pricipal point in pixels
         f = c / np.tan(self.camera_angle)
-        self.K = np.array([
-            [f, 0, c],
-            [0, f, c],
-            [0, 0, 1]
-        ], dtype=np.float32)
+        self.K = np.array([[f, 0, c], [0, f, c], [0, 0, 1]], dtype=np.float32)
 
         # Load images and camera extrinsics
         self.image_ids = []
@@ -436,28 +446,31 @@ class BlenderDataset:
             self.camtoworlds.append(camtoworld)
             self.alphas.append(rgba[..., 3] / 255.0)
         self.camtoworlds = np.array(self.camtoworlds, dtype=np.float32)
-                
+
     def add_bg_color(self, rgba):
         if self.bg_color is None:
             return rgba[..., :3]
-        rgb = rgba[..., :3] # [0, 255]
+        rgb = rgba[..., :3]  # [0, 255]
         alpha = rgba[..., 3:4] / 255.0
         image = rgb * alpha + self.bg_color * (1 - alpha)
         return image
-        
+
     def __len__(self):
         return len(self.image_ids)
 
-    def __getitem__(self, index:int) -> Dict[str, Any]:
+    def __getitem__(self, index: int) -> Dict[str, Any]:
         data = {
             "K": torch.tensor(self.K, dtype=torch.float).float(),
-            "camtoworld": torch.tensor(self.camtoworlds[index], dtype=torch.float).float(),
+            "camtoworld": torch.tensor(
+                self.camtoworlds[index], dtype=torch.float
+            ).float(),
             "image": torch.tensor(self.images[index], dtype=torch.float).float(),
             "alpha": torch.tensor(self.alphas[index], dtype=torch.float).float(),
             "image_id": index,  # the index of the image in the dataset
         }
         return data
-    
+
+
 if __name__ == "__main__":
     import argparse
 
